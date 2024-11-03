@@ -1,195 +1,125 @@
 import os
 import requests
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinter import ttk
-from ttkthemes import ThemedTk
 import configparser
+import re
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.filechooser import FileChooserIconView
+from kivy.uix.listview import ListView
+from kivy.uix.popup import Popup
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.image import Image
+from kivy.animation import Animation
 
-# Инициализация конфигурации
 config = configparser.ConfigParser()
 
-# Создание главного окна с темой
-root = ThemedTk(theme="arc")
-root.title("Менеджер модов")
+class ModManagerApp(App):
+    def build(self):
+        self.title = "Менеджер модов"
+        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
 
-# Переменные
-folder_var = tk.StringVar()
-version_var = tk.StringVar()
-loader_var = tk.StringVar()
+        self.folder_input = TextInput(hint_text="Выберите папку для загрузки", multiline=False)
+        self.layout.add_widget(self.folder_input)
 
-# Функция для загрузки настроек из файла
-def load_settings():
-    if os.path.exists('mods.ini'):
-        config.read('mods.ini')
-        if 'Settings' in config:
-            folder_var.set(config['Settings'].get('download_folder', ''))
-            version_var.set(config['Settings'].get('minecraft_version', '1.21.1'))
-            loader_var.set(config['Settings'].get('loader', 'fabric'))
-        if 'Mods' in config:
-            return config['Mods'].values()
-    return []
+        self.select_folder_button = Button(text="Выбрать папку", on_press=self.select_folder)
+        self.layout.add_widget(self.select_folder_button)
 
-# Функция для сохранения настроек в файл
-def save_settings():
-    config['Settings'] = {
-        'download_folder': folder_var.get(),
-        'minecraft_version': version_var.get(),
-        'loader': loader_var.get()
-    }
-    config['Mods'] = {f'mod_{i}': url for i, url in enumerate(mod_links)}
-    with open('mods.ini', 'w') as configfile:
-        config.write(configfile)
+        self.mod_list = ListView()
+        self.layout.add_widget(ScrollView(size_hint=(1, 0.5), do_scroll_x=False, do_scroll_y=True))
 
-# Список ссылок на моды
-mod_links = list(load_settings())
+        self.mod_input = TextInput(hint_text="Введите URL мода", multiline=False)
+        self.layout.add_widget(self.mod_input)
 
-# Функция для получения последней версии мода
-def get_latest_version(mod_url, game_version, loader):
-    mod_id = mod_url.split('/')[-1]
-    url = f"https://api.modrinth.com/v2/project/{mod_id}/version"
-    response = requests.get(url)
-    if response.status_code == 200:
-        versions = response.json()
-        for version in versions:
-            if game_version in version["game_versions"] and loader in version["loaders"]:
-                return version
-    return None
+        self.add_mod_button = Button(text="Добавить мод", on_press=self.add_mod)
+        self.layout.add_widget(self.add_mod_button)
 
-# Функция для загрузки файла
-def download_file(url, dest_folder, filename):
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        file_path = os.path.join(dest_folder, filename)
-        with open(file_path, 'wb') as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                file.write(chunk)
-        log_message(f"Файл {filename} загружен в {dest_folder}", "success")
-    else:
-        log_message(f"Ошибка: Не удалось загрузить файл {filename}", "error")
+        self.remove_mod_button = Button(text="Удалить выбранный мод", on_press=self.remove_mod)
+        self.layout.add_widget(self.remove_mod_button)
 
-# Функция для выбора папки
-def select_folder():
-    folder = filedialog.askdirectory()
-    if folder:
-        folder_var.set(folder)
-        log_message(f"Выбрана папка: {folder}", "success")
-        save_settings()
+        self.download_button = Button(text="Загрузить моды", on_press=self.download_mods)
+        self.layout.add_widget(self.download_button)
 
-# Функция для обновления списка модов
-def update_mod_list():
-    mod_listbox.delete(0, tk.END)
-    for mod in mod_links:
-        mod_listbox.insert(tk.END, mod)
-    log_message("Список модов обновлен", "success")
+        self.console = Label(size_hint_y=None, height=44)
+        self.layout.add_widget(self.console)
 
-# Функция для добавления мода
-def add_mod():
-    mod_url = mod_entry.get()
-    if mod_url:
-        mod_links.append(mod_url)
-        update_mod_list()
-        log_message(f"Добавлен мод: {mod_url}", "success")
-        save_settings()
+        self.load_settings()
+        return self.layout
 
-# Функция для удаления выбранного мода
-def remove_mod():
-    selected_mod = mod_listbox.curselection()
-    if selected_mod:
-        mod_url = mod_links.pop(selected_mod[0])
-        update_mod_list()
-        log_message(f"Удален мод: {mod_url}", "success")
-        save_settings()
+    def load_settings(self):
+        if os.path.exists('mods.ini'):
+            config.read('mods.ini')
+            if 'Settings' in config:
+                self.folder_input.text = config['Settings'].get('download_folder', '')
 
-import re
+    def select_folder(self, instance):
+        chooser = FileChooserIconView()
+        popup = Popup(title="Выберите папку", content=chooser, size_hint=(0.9, 0.9))
+        chooser.bind(on_submit=self.on_folder_selected)
+        popup.open()
 
-def download_mods():
-    download_folder = folder_var.get()
-    game_version = version_var.get()
-    loader = loader_var.get()
-    if not download_folder:
-        messagebox.showerror("Ошибка", "Выберите папку для загрузки")
-        return
-    for mod_url in mod_links:
-        version_info = get_latest_version(mod_url, game_version, loader)
-        if version_info:
-            version_number = version_info["version_number"]
-            filename = version_info["files"][0]["filename"]
-            download_url = version_info["files"][0]["url"]
-            file_path = os.path.join(download_folder, filename)
-            
-            # Проверка, существует ли файл и соответствует ли он последней версии
-            if os.path.exists(file_path):
-                log_message(f"Мод {filename} уже установлен и соответствует последней версии.", "success")
-                continue
-            
-            # Удаление старой версии, если она существует
-            base_name = re.sub(r'-\d+(\.\d+)*', '', filename)  # Удаляем версию из имени файла
-            for existing_file in os.listdir(download_folder):
-                if existing_file.startswith(base_name) and existing_file != filename:
-                    os.remove(os.path.join(download_folder, existing_file))
-                    log_message(f"Удалена старая версия мода: {existing_file}", "success")
-            
-            # Загрузка новой версии
-            download_file(download_url, download_folder, filename)
+    def on_folder_selected(self, chooser, selection, touch):
+        if selection:
+            self.folder_input.text = selection[0]
+            self.save_settings()
+
+    def save_settings(self):
+        config['Settings'] = {'download_folder': self.folder_input.text}
+        with open('mods.ini', 'w') as configfile:
+            config.write(configfile)
+
+    def add_mod(self, instance):
+        mod_url = self.mod_input.text
+        if mod_url:
+            self.mod_list.adapter.data.extend([mod_url])
+            self.mod_list._trigger_reset_populate()
+            self.console.text += f"Добавлен мод: {mod_url}\n"
+            self.save_settings()
+
+    def remove_mod(self, instance):
+        selected_mod = self.mod_list.adapter.get_data()
+        if selected_mod:
+            self.mod_list.adapter.data.remove(selected_mod[0])
+            self.mod_list._trigger_reset_populate()
+            self.console.text += f"Удален мод: {selected_mod[0]}\n"
+            self.save_settings()
+
+    def download_mods(self, instance):
+        download_folder = self.folder_input.text
+        if not download_folder:
+            self.console.text += "Ошибка: Выберите папку для загрузки\n"
+            return
+        for mod_url in self.mod_list.adapter.get_data():
+            version_info = self.get_latest_version(mod_url)
+            if version_info:
+                filename = version_info["files"][0]["filename"]
+                download_url = version_info["files"][0]["url"]
+                self.download_file(download_url, download_folder, filename)
+            else:
+                self.console.text += f"Предупреждение: Мод {mod_url} не найден\n"
+
+    def get_latest_version(self, mod_url):
+        mod_id = mod_url.split('/')[-1]
+        url = f"https://api.modrinth.com/v2/project/{mod_id}/version"
+        response = requests.get(url)
+        if response.status_code == 200:
+            versions = response.json()
+            return next((version for version in versions if "1.21.1" in version["game_versions"]), None)
+        return None
+
+    def download_file(self, url, dest_folder, filename):
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            file_path = os.path.join(dest_folder, filename)
+            with open(file_path, 'wb') as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+            self.console.text += f"Файл {filename} загружен в {dest_folder}\n"
         else:
-            log_message(f"Предупреждение: Мод {mod_url}, версия для {game_version} не найдена", "error")
+            self.console.text += f"Ошибка: Не удалось загрузить файл {filename}\n"
 
-# Функция для логирования сообщений в консоль
-def log_message(message, tag):
-    console_text.insert(tk.END, message + "\n", tag)
-    console_text.see(tk.END)
-
-# Настройка стиля
-style = ttk.Style()
-style.configure("TButton", padding=6, relief="flat", background="#ccc")
-style.map("TButton",
-          foreground=[('pressed', 'red'), ('active', 'blue')],
-          background=[('pressed', '!disabled', 'black'), ('active', 'white')])
-
-# Основной фрейм
-main_frame = ttk.Frame(root)
-main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-# Интерфейс
-ttk.Label(main_frame, text="Выберите папку для загрузки:").pack()
-ttk.Entry(main_frame, textvariable=folder_var, width=50).pack()
-ttk.Button(main_frame, text="Выбрать папку", command=select_folder).pack()
-
-ttk.Label(main_frame, text="Список модов:").pack()
-mod_listbox = tk.Listbox(main_frame, width=50, height=10)
-mod_listbox.pack()
-
-# Поле для ввода ссылки на мод
-mod_entry = ttk.Entry(main_frame, width=50)
-mod_entry.pack()
-
-ttk.Button(main_frame, text="Добавить мод", command=add_mod).pack()
-ttk.Button(main_frame, text="Удалить выбранный мод", command=remove_mod).pack()
-
-ttk.Label(main_frame, text="Выберите версию Minecraft:").pack()
-ttk.Entry(main_frame, textvariable=version_var, width=50).pack()
-
-ttk.Label(main_frame, text="Выберите загрузчик:").pack()
-loader_menu = ttk.OptionMenu(main_frame, loader_var, "fabric", "fabric", "forge", "quit", "neoforge")
-loader_menu.pack()
-
-ttk.Button(main_frame, text="Обновить список модов", command=update_mod_list).pack()
-ttk.Button(main_frame, text="Загрузить моды", command=download_mods).pack()
-
-# Консоль для вывода сообщений
-console_frame = ttk.Frame(root)
-console_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-console_text = tk.Text(console_frame, width=60, height=20, state='normal')
-console_text.pack()
-
-# Настройка тегов для изменения цвета текста
-console_text.tag_config("success", foreground="green")
-console_text.tag_config("error", foreground="red")
-
-# Инициализация списка модов
-update_mod_list()
-
-# Запуск приложения
-root.mainloop()
+if __name__ == '__main__':
+    ModManagerApp().run()
